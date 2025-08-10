@@ -1,0 +1,97 @@
+name: Build and Release Flutter App
+on:
+  push:
+    tags:
+      - "*"
+jobs:
+  android-build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.24.1
+      - name: Get Dependencies
+        run: flutter pub get
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/keystore.jks
+      - name: Create key.properties
+        run: |
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
+          echo "storeFile=keystore.jks" >> android/key.properties
+      - name: Build APK
+        run: flutter build apk --release
+      - name: Rename APK
+        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/aerius-android.apk
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aerius-android.apk
+          path: build/app/outputs/flutter-apk/aerius-android.apk
+  ios-build:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.24.1
+      - name: Get Dependencies
+        run: flutter pub get
+      - name: Build iOS IPA
+        run: flutter build ios --release --no-codesign
+      - name: Create IPA File
+        run: |
+          mkdir -p Payload
+          mv build/ios/iphoneos/Runner.app Payload/
+          zip -qq -r -9 aerius-ios.ipa Payload
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aerius-ios.ipa
+          path: aerius-ios.ipa
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [android-build, ios-build]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aerius-android.apk
+          path: .
+      - name: Download IPA Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aerius-ios.ipa
+          path: .
+      - name: Get Tag Version
+        id: get_tag
+        run: |
+          echo "release_tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      - name: Upload Assets to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_tag.outputs.release_tag }}
+          files: |
+            aerius-android.apk
+            aerius-ios.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
